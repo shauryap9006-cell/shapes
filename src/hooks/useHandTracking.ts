@@ -157,7 +157,8 @@ export function useHandTracking({ enabled, videoRef }: UseHandTrackingOptions) {
       setError(event.message || "Hand tracking worker crashed.");
     };
 
-    worker.postMessage({ type: "init", origin: window.location.origin, sab: sabRef.current });
+    const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+    worker.postMessage({ type: "init", origin: window.location.origin + basePath, sab: sabRef.current });
     useGestureStore.getState().setCalibrationHandlers({
       startCalibration: () => worker.postMessage({ type: "start-calibration" }),
       resetCalibration: () => worker.postMessage({ type: "reset-calibration" }),

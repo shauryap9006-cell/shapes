@@ -22,8 +22,13 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
   return (
     <html lang="en">
+      <head>
+        {/* eslint-disable-next-line @next/next/no-sync-scripts */}
+        <script src={`${basePath}/coi-serviceworker.js`} />
+      </head>
       <body className={`${inter.variable} ${spaceGrotesk.variable}`}>
         {children}
       </body>
