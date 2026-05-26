@@ -54,7 +54,13 @@ if (typeof window === 'undefined') {
                         headers: newHeaders,
                     });
                 })
-                .catch((e) => console.error(e))
+                .catch((e) => {
+                    console.error(e);
+                    return new Response(
+                        "Network error occurred",
+                        { status: 503, statusText: "Service Unavailable" }
+                    );
+                })
         );
     });
 
