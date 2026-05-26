@@ -1,0 +1,516 @@
+================================================================
+PRODUCT REQUIREMENTS DOCUMENT
+================================================================
+Product       : Gesture Playground
+Version       : 1.0 — Level 1 (MVP)
+Status        : Draft
+Last Updated  : 2026-05-25
+================================================================
+
+
+----------------------------------------------------------------
+1. PRODUCT VISION
+----------------------------------------------------------------
+
+Gesture Playground is a browser-based, realtime gesture-controlled
+3D experience. Users control a virtual 3D environment using only
+their hands through a webcam — no mouse, no keyboard, no UI buttons.
+
+The experience itself is the product. There is no dashboard,
+no login, no feed. A user opens the site, enables their camera,
+and their hands become the controller.
+
+The core promise:
+  "What if your hands could reach into a screen and move things?"
+
+Target feeling: futuristic, smooth, experimental, immersive.
+
+
+----------------------------------------------------------------
+2. GOALS
+----------------------------------------------------------------
+
+Primary Goals
+  [G-01]  Deliver realtime hand tracking at 30fps minimum
+  [G-02]  Recognise 7 distinct hand gestures reliably
+  [G-03]  Let users spawn, grab, move, and throw 3D objects
+  [G-04]  Keep the experience fullscreen and UI-minimal
+  [G-05]  Integrate AI to extend the experience meaningfully
+
+Non-Goals (Level 1)
+  - No user accounts or saved sessions
+  - No multiplayer or shared rooms
+  - No mobile support (desktop-only, Level 1)
+  - No complex landing page or marketing site
+  - No heavy shader or particle effects
+  - No AR camera compositing
+
+
+----------------------------------------------------------------
+3. USERS
+----------------------------------------------------------------
+
+Primary User
+  A developer, designer, or tech-curious person who wants to
+  experience something experimental in a browser with no install.
+  They are comfortable giving webcam access and expect the thing
+  to just work.
+
+User Context
+  - Desktop browser (Chrome or Edge preferred)
+  - Reasonably lit environment
+  - Hands visible in front of camera
+  - No special hardware required
+
+
+----------------------------------------------------------------
+4. FUNCTIONAL REQUIREMENTS
+----------------------------------------------------------------
+
+4.1  ENTRY EXPERIENCE
+---------------------
+[F-01]  The site SHALL display a minimal entry screen on load.
+        Contents: project name, one-line description, Enter button.
+
+[F-02]  Clicking Enter SHALL trigger a webcam permission request.
+
+[F-03]  If permission is denied, the app SHALL display a clear
+        error state with a retry button and an HTTPS note.
+
+[F-04]  If permission is granted, the app SHALL immediately begin
+        loading MediaPipe and transition to the experience.
+
+[F-05]  A loading indicator SHALL appear while MediaPipe initialises.
+
+[F-06]  If MediaPipe fails to load (WASM error, network failure),
+        the app SHALL display an error state with a retry button.
+
+
+4.2  HAND TRACKING
+------------------
+[F-07]  The app SHALL detect up to 2 hands simultaneously.
+
+[F-08]  MediaPipe Hands SHALL run inside a Web Worker using
+        OffscreenCanvas to prevent main thread jank.
+
+[F-09]  The app SHALL render a hand skeleton overlay (21 landmarks
+        per hand) as a subtle visual layer over the 3D scene.
+
+[F-10]  When no hands are detected, all scene objects SHALL freeze
+        in place. Nothing shall reset or glitch.
+
+[F-11]  Hand landmark data SHALL be posted from the worker to the
+        main thread via postMessage at every processed frame.
+
+
+4.3  COORDINATE MAPPING
+-----------------------
+[F-12]  A coordinateMapper utility SHALL convert MediaPipe's
+        normalised 2D landmark coordinates (0–1 range, camera space)
+        into Three.js world coordinates.
+
+        Mapping formula:
+          three_x = (mediapipe.x - 0.5) * SCENE_WIDTH
+          three_y = -(mediapipe.y - 0.5) * SCENE_HEIGHT
+          three_z = mediapipe.z is used for depth hints only
+
+[F-13]  The mapper SHALL be the single source of truth for all
+        2D → 3D conversions. No other module shall perform this
+        conversion independently.
+
+
+4.4  GESTURE RECOGNITION
+------------------------
+[F-14]  The app SHALL detect the following 7 gestures:
+
+        GESTURE               DETECTION METHOD
+        ─────────────────     ─────────────────────────────────
+        One finger            Index extended, others folded
+        Two fingers           Index + middle extended
+        Three fingers         Index + middle + ring extended
+        Fist                  All fingers folded, thumb across
+        Open palm             All five fingers extended
+        Pinch                 Thumb tip + index tip distance < threshold
+        Both fists            Fist detected on both hands simultaneously
+
+[F-15]  A gesture SHALL NOT fire unless it has been held stable
+        for 200 milliseconds (stability threshold).
+
+[F-16]  After a gesture action fires, a 600ms cooldown SHALL
+        prevent the same gesture from triggering again.
+
+[F-17]  Current detected gesture name and confidence score SHALL
+        be tracked in gestureStore (Zustand).
+
+[F-18]  A semi-transparent gesture hint panel SHALL display in the
+        corner of the screen showing:
+        - Current detected gesture (name + icon)
+        - What it does
+        This panel SHALL fade out after 10 seconds of inactivity
+        and reappear when no gesture is detected for 3 seconds.
+
+
+4.5  GESTURE → ACTION MAP
+-------------------------
+[F-19]  Gesture actions SHALL be mapped as follows:
+
+        GESTURE         ACTION
+        ─────────────   ────────────────────────────────────
+        Two fingers     Spawn cube at hand position
+        One finger      Spawn sphere at hand position
+        Three fingers   Spawn torus at hand position
+        Fist            Grab nearest object (within threshold)
+        Open palm       Release held object / throw
+        Pinch           Precise grab of small/distant objects
+        Both fists      Clear all objects (scene reset)
+
+
+4.6  OBJECT SYSTEM
+------------------
+[F-20]  The app SHALL support 4 spawnable 3D shape types:
+        - Cube         (BoxGeometry)
+        - Sphere       (SphereGeometry)
+        - Torus        (TorusGeometry)
+        - Pyramid      (ConeGeometry, 4 radial segments)
+
+[F-21]  Objects SHALL use MeshStandardMaterial with a subtle
+        emissive glow. Each shape type SHALL have a distinct color.
+
+[F-22]  The scene SHALL enforce a hard cap of 15 objects.
+        When the cap is hit, the oldest object SHALL be removed.
+
+[F-23]  Object spawn SHALL animate from scale 0 → 1 over 200ms.
+
+[F-24]  Spawned objects SHALL maintain their last position when
+        hands leave the frame (no reset, no deletion).
+
+
+4.7  OBJECT INTERACTION
+-----------------------
+[F-25]  On fist gesture, the app SHALL find the nearest object
+        within a grab threshold radius of the index finger MCP
+        landmark. That object becomes "grabbed".
+
+[F-26]  A grabbed object SHALL follow the hand's world position
+        with lerp smoothing (factor: 0.15) to prevent snapping.
+
+[F-27]  Only one object can be grabbed per hand at a time.
+
+[F-28]  The app SHALL track the hand's world position across the
+        last 8 frames (velocityTracker utility).
+
+[F-29]  On open palm gesture (release), the stored velocity vector
+        SHALL be applied to the released object as a throw impulse.
+
+[F-30]  Throw impulse magnitude SHALL be clamped to a max speed
+        to prevent objects flying out of scene bounds.
+
+[F-31]  A point light SHALL follow the grabbed object, creating
+        a subtle glow-transfer visual feedback effect.
+
+
+4.8  3D ENVIRONMENT
+-------------------
+[F-32]  Scene background SHALL be solid dark (#0a0a0f).
+
+[F-33]  Scene SHALL include ambient lighting (low intensity)
+        and one directional light.
+
+[F-34]  An invisible floor plane at y=0 SHALL prevent objects
+        from falling infinitely. (Soft boundary, no Rapier in MVP.)
+
+[F-35]  An optional subtle grid on the floor plane SHALL be
+        rendered using Three.js GridHelper.
+
+
+4.9  PHYSICS (PHASE 7 — NOT MVP)
+---------------------------------
+[F-36]  Rapier physics (@dimforge/rapier3d-compat) SHALL be
+        integrated in Phase 7 only.
+
+[F-37]  Phase 7 physics requirements:
+        - Gravity applied to all scene objects
+        - Rigid body colliders on all objects
+        - Floor plane as static collider
+        - Throw velocity → Rapier impulse
+        - Object-to-object collision detection
+
+        Rapier SHALL NOT be installed or imported in MVP builds.
+
+
+----------------------------------------------------------------
+5. AI FEATURE REQUIREMENTS
+----------------------------------------------------------------
+
+5.1  CUSTOM GESTURE TRAINING  [AI-01]
+--------------------------------------
+Tool        : TensorFlow.js (on-device, no API calls)
+Location    : src/workers/gestureTrainer.worker.ts
+
+[AI-01-a]  Users SHALL be able to define custom gestures by
+           holding a new pose steadily for 5 repetitions.
+
+[AI-01-b]  TensorFlow.js SHALL train a lightweight classifier
+           in-browser using those 5 samples.
+
+[AI-01-c]  Trained gestures SHALL be stored in localStorage
+           and persist across sessions.
+
+[AI-01-d]  Custom gestures SHALL appear in the gesture → action
+           map alongside built-in gestures.
+
+[AI-01-e]  Training SHALL occur entirely on-device. No landmark
+           data SHALL be sent to any server.
+
+
+5.2  VOICE COMMANDS VIA CLAUDE API  [AI-02]
+--------------------------------------------
+Tool        : Claude API (cloud) + Web Speech API
+Endpoint    : /api/voice-command (Next.js API route)
+
+[AI-02-a]  The Web Speech API SHALL capture the user's voice
+           and transcribe it to text client-side.
+
+[AI-02-b]  The transcribed text plus a snapshot of current scene
+           state SHALL be sent to a Next.js API route.
+
+[AI-02-c]  The API route SHALL call Claude with a structured
+           system prompt that defines all valid scene actions.
+
+[AI-02-d]  Claude SHALL return a JSON action array:
+           [{ action: "spawn", type: "sphere", count: 5,
+              arrangement: "circle", radius: 2 }]
+
+[AI-02-e]  The client SHALL parse and execute the action array.
+           Invalid or unknown actions SHALL be silently ignored.
+
+[AI-02-f]  Example voice commands the system SHALL handle:
+           - "spawn five spheres in a circle"
+           - "make everything bigger"
+           - "clear the scene"
+           - "throw all objects up"
+           - "make the cubes orbit the sphere"
+
+[AI-02-g]  A visible microphone indicator SHALL show when the
+           system is listening vs processing.
+
+
+5.3  AI SCENE COMPOSER  [AI-03]
+---------------------------------
+Tool        : Claude API (cloud)
+Endpoint    : /api/compose-scene (Next.js API route)
+
+[AI-03-a]  A minimal text input SHALL allow users to describe
+           a scene in natural language.
+
+[AI-03-b]  The description SHALL be sent to Claude which returns
+           a complete scene configuration as JSON:
+           {
+             objects: [
+               { type: "sphere", position: [x,y,z],
+                 scale: 1.2, color: "#4488ff" },
+               ...
+             ]
+           }
+
+[AI-03-c]  The client SHALL clear the current scene and spawn
+           objects as described in the config.
+
+[AI-03-d]  Example prompts the system SHALL handle:
+           - "recreate the solar system"
+           - "a tower of cubes with a sphere on top"
+           - "chaos — lots of small shapes everywhere"
+           - "a ring of toruses around a giant sphere"
+
+[AI-03-e]  Object count in AI-generated scenes SHALL be capped
+           at the existing 15-object scene limit.
+
+
+5.4  MOOD-RESPONSIVE ENVIRONMENT  [AI-04]
+------------------------------------------
+Tool        : On-device heuristic model (no API)
+Location    : src/utils/moodEngine.ts
+
+[AI-04-a]  The mood engine SHALL analyse hand velocity and
+           movement variance across the last 30 frames.
+
+[AI-04-b]  Two mood states SHALL be computed:
+           - HIGH ENERGY  : fast, erratic hand movement
+           - CALM         : slow, deliberate hand movement
+
+[AI-04-c]  Mood state SHALL smoothly shift the following:
+           - Scene ambient light color temperature
+           - Object material emissive intensity
+           - Background darkness level
+
+[AI-04-d]  Mood transitions SHALL be eased over 2 seconds to
+           avoid jarring changes.
+
+[AI-04-e]  No API calls. No data leaves the browser.
+
+
+5.5  AI OBJECT PERSONALITY  [AI-05]
+-------------------------------------
+Tool        : Claude API (cloud)
+Endpoint    : /api/object-personality (Next.js API route)
+
+[AI-05-a]  When an object is spawned, the app SHALL call Claude
+           with: object type, current scene object count, scene
+           mood state.
+
+[AI-05-b]  Claude SHALL return a behavior profile JSON:
+           {
+             drift: "upward" | "none" | "circular",
+             rotation: "slow-spin" | "fast-spin" | "wobble" | "none",
+             reactsToProximity: "repel" | "attract" | "none",
+             glowPulse: true | false
+           }
+
+[AI-05-c]  The scene SHALL apply this behavior profile to the
+           spawned object permanently for its lifetime.
+
+[AI-05-d]  API calls for object personality SHALL be fire-and-forget.
+           Objects spawn immediately with default behavior, then
+           update to AI behavior when the response arrives.
+
+[AI-05-e]  Responses SHALL be cached per object type + mood combo
+           to limit API call frequency.
+
+
+----------------------------------------------------------------
+6. NON-FUNCTIONAL REQUIREMENTS
+----------------------------------------------------------------
+
+Performance
+  [NF-01]  Target 60fps render loop on mid-range desktop hardware.
+  [NF-02]  MediaPipe frame processing SHALL not block the main thread.
+           Maximum acceptable frame latency: 33ms.
+  [NF-03]  Hand landmark → scene update round trip SHALL be < 50ms.
+
+Reliability
+  [NF-04]  All camera and MediaPipe failure modes SHALL display
+           a user-facing error, never a silent blank screen.
+  [NF-05]  The scene SHALL remain interactive even if an AI API
+           call fails. All AI features are additive, not critical.
+
+Compatibility
+  [NF-06]  Level 1 target browsers: Chrome 110+, Edge 110+.
+  [NF-07]  Firefox and Safari are out of scope for Level 1.
+  [NF-08]  Mobile browsers are out of scope for Level 1.
+           A "best on desktop" guard SHALL appear on mobile viewports.
+
+Security
+  [NF-09]  Webcam stream SHALL NEVER be transmitted to any server.
+           Only landmark coordinate data (21 points per hand) is
+           used in the application logic.
+  [NF-10]  Claude API calls SHALL be proxied through Next.js API
+           routes. The API key SHALL NEVER be exposed to the client.
+  [NF-11]  Custom gesture training data (TF.js) SHALL remain
+           on-device in localStorage only.
+
+Accessibility
+  [NF-12]  Gesture hint overlay SHALL have sufficient contrast
+           for readability.
+  [NF-13]  An optional keyboard fallback mode is a future scope
+           item, not a Level 1 requirement.
+
+
+----------------------------------------------------------------
+7. TECHNICAL CONSTRAINTS
+----------------------------------------------------------------
+
+  [TC-01]  MediaPipe MUST run in a Web Worker via OffscreenCanvas.
+           Never on the main thread.
+
+  [TC-02]  Rapier physics MUST NOT be imported in MVP.
+           It is Phase 7 only.
+
+  [TC-03]  All gesture logic MUST debounce via the 200ms stability
+           threshold + 600ms cooldown. No exceptions.
+
+  [TC-04]  Coordinate mapping (2D → 3D) MUST go through
+           coordinateMapper.ts exclusively.
+
+  [TC-05]  Claude API MUST be called only from Next.js API routes,
+           never from client-side code directly.
+
+  [TC-06]  Scene object cap MUST be enforced at 15 objects.
+           Auto-remove oldest on overflow.
+
+  [TC-07]  Throw impulse MUST be clamped to prevent objects
+           exceeding scene bounds.
+
+
+----------------------------------------------------------------
+8. STATE MANAGEMENT SPEC  (Zustand)
+----------------------------------------------------------------
+
+sceneStore
+  objects          : SceneObject[]
+  addObject        : (type: ShapeType) => void
+  removeObject     : (id: string) => void
+  clearScene       : () => void
+  grabbedObjectId  : string | null
+  setGrabbed       : (id: string | null) => void
+
+gestureStore
+  currentGesture   : GestureType | null
+  confidence       : number
+  handPosition     : Vector3 | null
+  bothHandsVisible : boolean
+  setGesture       : (gesture, confidence, position) => void
+
+cameraStore
+  permitted        : boolean
+  active           : boolean
+  error            : string | null
+  setPermitted     : (val: boolean) => void
+  setError         : (msg: string | null) => void
+
+aiStore
+  voiceListening   : boolean
+  composerInput    : string
+  lastAIAction     : string | null
+  mood             : 'calm' | 'high-energy'
+
+
+----------------------------------------------------------------
+9. SUCCESS METRICS
+----------------------------------------------------------------
+
+MVP is considered successful when:
+
+  [SM-01]  A user with no instruction can spawn an object
+           within 30 seconds of entering the experience.
+
+  [SM-02]  Gesture recognition accuracy is above 85% under
+           normal indoor lighting conditions.
+
+  [SM-03]  Scene maintains 60fps with 10 active objects and
+           both hands tracked simultaneously.
+
+  [SM-04]  Camera permission → first tracked hand appears
+           in under 3 seconds on a standard connection.
+
+  [SM-05]  Zero silent failures — every error state has a
+           visible message and a recovery action.
+
+
+----------------------------------------------------------------
+10. OUT OF SCOPE (LEVEL 1)
+----------------------------------------------------------------
+
+  - Multiplayer / shared scenes
+  - Mobile browser support
+  - Authentication or saved sessions
+  - Custom GLSL shaders
+  - Particle morphing or holographic effects
+  - Gesture combo sequences
+  - AR (camera compositing over real world)
+  - Haptic feedback
+  - Hand-drawn gesture recording beyond TF.js training
+
+
+================================================================
+END OF DOCUMENT
+================================================================

@@ -1,0 +1,14 @@
+node_modules
+.next
+.next.stale*
+out
+dist
+*.log
+.env*
+!.env.example
+tsconfig.tsbuildinfo
+.agent/
+.agent
+.antigravity*
+.claude*
+.securecoder*
